@@ -1,0 +1,594 @@
+@@ -7,7 +7,7 @@ jobs:
+  build:
+    docker:
+      # specify the version you desire here
+      - image: circleci/openjdk:jdk #circleci/openjdk@sha256:826939f759e288a4b8c5b03e9c36b3333049ec5c83460e4b915ec339724ebafe
+      - image: cimg/openjdk:15.0.1
+
+    # Specify service dependencies here if necessary
+    # CircleCI maintains a library of pre-built images
+@@ -18,7 +18,7 @@ jobs:
+
+    environment:
+      # Customize the JVM maximum heap limit
+      JVM_OPTS: -Xmx3200m -jvm-target 1.8 
+      JVM_OPTS: -Xmx3200m -jvm-target 1.8
+      TERM: dumb
+
+    steps:
+@@ -40,6 +40,3 @@ jobs:
+
+      # run tests!
+      - run: gradle test
+
+
+
+  2  gradle.properties 
+@@ -3,7 +3,7 @@ org.gradle.parallel=true
+org.gradle.console=auto
+kotlin.code.style=official
+color_thief_version=v1.1.2
+jda_version=4.2.1_262
+jda_version=4.3.0_289
+kotlin_version=1.4.10
+kotlin_script_version=1.3.72
+kotlin_coro_version=1.3.2
+  7  src/main/kotlin/bot/boobbot/BoobBot.kt 
+@@ -4,12 +4,8 @@ import bot.boobbot.audio.GuildMusicManager
+import bot.boobbot.audio.sources.pornhub.PornHubAudioSourceManager
+import bot.boobbot.audio.sources.redtube.RedTubeAudioSourceManager
+import bot.boobbot.entities.framework.EventWaiter
+import bot.boobbot.entities.internals.CommandRegistry
+import bot.boobbot.entities.internals.CustomSentryClient
+import bot.boobbot.entities.internals.CustomShardManager
+import bot.boobbot.entities.internals.*
+import bot.boobbot.entities.misc.*
+import bot.boobbot.entities.internals.Config
+import bot.boobbot.entities.internals.Database
+import bot.boobbot.utils.RequestUtil
+import bot.boobbot.utils.Utils
+import ch.qos.logback.classic.Level
+@@ -68,6 +64,7 @@ class BoobBot {
+        val database = Database()
+
+        val commands = CommandRegistry()
+        val slashCommands = SlashCommandRegistry()
+        val waiter = EventWaiter()
+        val requestUtil = RequestUtil()
+        val playerManager = DefaultAudioPlayerManager()
+  2  src/main/kotlin/bot/boobbot/commands/dev/Test.kt 
+@@ -11,8 +11,6 @@ class Test : Command {
+    override fun execute(ctx: Context) {
+        sendSubcommandHelp(ctx)
+    }
+
+
+}
+
+
+ 23  src/main/kotlin/bot/boobbot/entities/framework/AsyncSlashCommand.kt 
+@@ -0,0 +1,23 @@
+package bot.boobbot.entities.framework
+
+import bot.boobbot.BoobBot
+import kotlinx.coroutines.GlobalScope
+import kotlinx.coroutines.async
+import net.dv8tion.jda.api.events.interaction.SlashCommandEvent
+
+interface AsyncSlashCommand : SlashCommand {
+
+    suspend fun executeAsync(event: SlashCommandEvent)
+
+    override fun execute(event: SlashCommandEvent) {
+        GlobalScope.async {
+            try {
+                executeAsync(event)
+            } catch (e: Exception) {
+                BoobBot.log.error("Command `${this@AsyncSlashCommand.name}` encountered an error during execution", e)
+                event.reply("\uD83D\uDEAB broken? dunno, report code 42 to https://discord.boob.bot").queue()
+            }
+        }
+    }
+
+}
+ 20  src/main/kotlin/bot/boobbot/entities/framework/ExecutableSlashCommand.kt 
+@@ -0,0 +1,20 @@
+package bot.boobbot.entities.framework
+
+import net.dv8tion.jda.api.entities.Message
+import net.dv8tion.jda.api.events.interaction.SlashCommandEvent
+
+class ExecutableSlashCommand(
+    private val cmd: SlashCommand,
+) {
+    val name = cmd.name
+    val hasProperties = cmd.hasProperties
+    val properties = cmd.properties
+    fun execute(event: SlashCommandEvent) {
+        if (!cmd.localCheck(event)) {
+            return
+        }
+        cmd.execute(event)
+
+    }
+
+} 
+ 32  src/main/kotlin/bot/boobbot/entities/framework/FunSlashCommand.kt 
+@@ -0,0 +1,32 @@
+package bot.boobbot.entities.framework
+
+import bot.boobbot.BoobBot
+import bot.boobbot.utils.Formats
+import bot.boobbot.utils.Utils.Companion.getRandomFunString
+import net.dv8tion.jda.api.EmbedBuilder
+import net.dv8tion.jda.api.events.interaction.SlashCommandEvent
+import net.dv8tion.jda.api.interactions.commands.OptionType
+import java.awt.Color
+import java.text.MessageFormat
+
+abstract class FunSlashCommand(private val category: String) : AsyncSlashCommand {
+    override suspend fun executeAsync(event: SlashCommandEvent) {
+        val target = event.options.firstOrNull()?.asMember
+            ?: return event.replyEmbeds(
+                EmbedBuilder().apply {
+                setColor(Color.red)
+                setDescription(Formats.error("you didn't mention a @user, dumbass.\n"))
+            }.build()).queue()
+
+        if (target.idLong == BoobBot.selfId) {
+            return event.reply("Don't you fucking touch me whore, i will end you.").queue()
+        }
+
+        if (target.idLong == event.member!!.idLong) {
+            return event.reply("aww how sad you wanna play with yourself, well fucking don't go find a friend whore.").queue()
+        }
+
+        val funString = MessageFormat.format(getRandomFunString(category), event.member!!.effectiveName, target.effectiveName)
+        event.reply(funString).queue()
+    }
+}
+ 28  src/main/kotlin/bot/boobbot/entities/framework/NekoLifeApiSlashCommand.kt 
+@@ -0,0 +1,28 @@
+package bot.boobbot.entities.framework
+
+import bot.boobbot.BoobBot
+import bot.boobbot.utils.Colors
+import bot.boobbot.utils.Formats
+import bot.boobbot.utils.json
+import net.dv8tion.jda.api.EmbedBuilder
+import net.dv8tion.jda.api.events.interaction.SlashCommandEvent
+import java.time.Instant
+
+abstract class NekoLifeApiSlashCommand(private val category: String) : AsyncSlashCommand {
+    override suspend fun executeAsync(event: SlashCommandEvent) {
+        val res = BoobBot.requestUtil.get("https://nekos.life/api/v2/img/$category").await()?.json()
+            ?: return event.reply(
+                Formats.error(" oh? something broken af")
+            ).queue()
+        event.replyEmbeds(
+            EmbedBuilder().apply {
+                setTitle("Nya~", "https://nekos.life")
+                setColor(Colors.rndColor)
+                setImage(res.getString("url"))
+                setFooter("Powered by https://nekos.life", "https://nekos.life/static/icons/favicon-194x194.png")
+                setTimestamp(Instant.now())
+            }.build()
+        ).queue()
+
+    }
+}
+ 26  src/main/kotlin/bot/boobbot/entities/framework/SlashCommand.kt 
+@@ -0,0 +1,26 @@
+package bot.boobbot.entities.framework
+
+import net.dv8tion.jda.api.events.interaction.SlashCommandEvent
+
+interface SlashCommand {
+
+    val name: String
+        get() = this.javaClass.simpleName.toLowerCase()
+
+    val properties: CommandProperties
+        get() = this.javaClass.getAnnotation(CommandProperties::class.java)
+
+    val hasProperties: Boolean
+        get() = this.javaClass.isAnnotationPresent(CommandProperties::class.java)
+
+    /**
+     * Command-local check that is executed before the command or any subcommands are
+     * executed.
+     *
+     * @returns Whether or not command execution can proceed.
+     */
+    fun localCheck(event: SlashCommandEvent): Boolean = true
+
+    fun execute(event: SlashCommandEvent)
+
+}
+ 22  src/main/kotlin/bot/boobbot/entities/framework/SlashIndexer.kt 
+@@ -0,0 +1,22 @@
+package bot.boobbot.entities.framework
+
+import org.reflections.Reflections
+import java.lang.reflect.Modifier
+
+class SlashIndexer(pkg: String) {
+
+    private val reflections = Reflections(pkg)
+
+    fun getCommands(): List<ExecutableSlashCommand> {
+        val allCommands = reflections.getSubTypesOf(SlashCommand::class.java)
+            .filter { !Modifier.isAbstract(it.modifiers) && !it.isInterface }
+        val cmds = mutableListOf<ExecutableSlashCommand>()
+        for (cmd in allCommands) {
+            val kls = cmd.getDeclaredConstructor().newInstance()
+            val e = ExecutableSlashCommand(kls)
+            cmds.add(e)
+        }
+        return cmds.toList()
+    }
+
+} 
+  4  src/main/kotlin/bot/boobbot/entities/internals/CustomShardManager.kt 
+@@ -4,6 +4,7 @@ import bot.boobbot.BoobBot
+import bot.boobbot.entities.framework.Context
+import bot.boobbot.handlers.EventHandler
+import bot.boobbot.handlers.MessageHandler
+import bot.boobbot.handlers.SlashHandler
+import bot.boobbot.utils.Formats
+import bot.boobbot.utils.WebhookManager
+import com.sedmelluq.discord.lavaplayer.jdaudp.NativeAudioSendFactory
+@@ -70,6 +71,7 @@ class CustomShardManager(private val token: String, sm: ShardManager) : ShardMan
+        }
+    }
+
+
+    fun authorOrAnonymous(ctx: Context): User {
+        return if (BoobBot.database.getUserAnonymity(ctx.author.id)) {
+            BoobBot.shardManager.anonymousUser
+@@ -111,7 +113,7 @@ class CustomShardManager(private val token: String, sm: ShardManager) : ShardMan
+                .setShardsTotal(shardCount)
+                .setActivity(Activity.playing("Booting...."))
+                .setStatus(OnlineStatus.DO_NOT_DISTURB)
+                .addEventListeners(BoobBot.waiter, MessageHandler(), EventHandler())
+                .addEventListeners(BoobBot.waiter, MessageHandler(), EventHandler(), SlashHandler())
+                .setAudioSendFactory(NativeAudioSendFactory())
+                .setHttpClient(jdaHttp)
+                .disableCache(EnumSet.of(CacheFlag.EMOTE, CacheFlag.ACTIVITY, CacheFlag.CLIENT_STATUS))
+ 21  src/main/kotlin/bot/boobbot/entities/internals/SlashCommandRegistry.kt 
+@@ -0,0 +1,21 @@
+package bot.boobbot.entities.internals
+
+import bot.boobbot.BoobBot
+import bot.boobbot.entities.framework.ExecutableCommand
+import bot.boobbot.entities.framework.ExecutableSlashCommand
+import bot.boobbot.entities.framework.Indexer
+import bot.boobbot.entities.framework.SlashIndexer
+
+class SlashCommandRegistry : HashMap<String, ExecutableSlashCommand>() {
+    init {
+        val indexer = SlashIndexer("bot.boobbot.slashcommands")
+        val commands = indexer.getCommands().associateBy { it.name }
+        this.putAll(commands)
+        BoobBot.log.info("Successfully loaded ${commands.size} slash commands!")
+    }
+
+    fun findCommand(commandName: String): ExecutableSlashCommand? {
+        return this[commandName]
+            ?: values.firstOrNull { it.properties.aliases.contains(commandName) }
+    }
+}
+  4  src/main/kotlin/bot/boobbot/handlers/MessageHandler.kt 
+@@ -4,6 +4,7 @@ import bot.boobbot.BoobBot
+import bot.boobbot.entities.db.Guild
+import bot.boobbot.entities.db.User
+import bot.boobbot.entities.framework.BootyDropper
+import bot.boobbot.entities.framework.Context
+import bot.boobbot.entities.internals.Config
+import bot.boobbot.utils.Formats
+import bot.boobbot.utils.Utils
+@@ -15,6 +16,7 @@ import de.mxro.metrics.jre.Metrics
+import kotlinx.coroutines.GlobalScope
+import kotlinx.coroutines.launch
+import net.dv8tion.jda.api.Permission
+import net.dv8tion.jda.api.events.interaction.SlashCommandEvent
+import net.dv8tion.jda.api.events.message.MessageReceivedEvent
+import net.dv8tion.jda.api.hooks.ListenerAdapter
+import java.util.concurrent.Executors
+@@ -192,6 +194,8 @@ class MessageHandler : ListenerAdapter() {
+        }
+    }
+
+
+
+    private fun processUser(event: MessageReceivedEvent) {
+        if (!event.isFromGuild) {
+            return
+ 113  src/main/kotlin/bot/boobbot/handlers/SlashHandler.kt 
+@@ -0,0 +1,113 @@
+package bot.boobbot.handlers
+
+import bot.boobbot.BoobBot
+import bot.boobbot.entities.db.Guild
+import bot.boobbot.entities.db.User
+import bot.boobbot.entities.internals.Config
+import bot.boobbot.utils.Formats
+import bot.boobbot.utils.Utils
+import bot.boobbot.utils.Utils.Companion.checkMissingPermissions
+import bot.boobbot.utils.json
+import de.mxro.metrics.jre.Metrics
+import net.dv8tion.jda.api.Permission
+import net.dv8tion.jda.api.events.interaction.SlashCommandEvent
+import net.dv8tion.jda.api.hooks.ListenerAdapter
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicInteger
+
+class SlashHandler : ListenerAdapter() {
+    private val threadCounter = AtomicInteger()
+    private val commandExecutorPool = Executors.newCachedThreadPool {
+        Thread(it, "Command-Executor-${threadCounter.getAndIncrement()}")
+    }
+    override fun onSlashCommand(event: SlashCommandEvent) {
+        print(event)
+        BoobBot.metrics.record(Metrics.happened("SlashCommandEvent"))
+        commandExecutorPool.execute {
+            processMessageEvent(event)
+        }
+    }
+
+    private fun processMessageEvent(event: SlashCommandEvent) {
+        val guild: Guild by lazy { BoobBot.database.getGuild(event.guild!!.id) }
+        if (event.isFromGuild) {
+
+            if (!event.textChannel.canTalk()) {
+                return
+            }
+            if (guild.ignoredChannels.contains(event.channel.id)
+                && !event.member!!.hasPermission(Permission.MESSAGE_MANAGE)
+            ) {
+                return
+            }
+        }
+
+        val command = BoobBot.slashCommands.findCommand(event.name)
+        if (command == null) { return }
+
+        if (event.isFromGuild && (guild.disabled.contains(command.name) || guild.channelDisabled.any { it.name == command.name && it.channelId == event.channel.id })) { return }
+        if (!command.properties.enabled) {
+            return
+        }
+
+        if (command.properties.developerOnly && !Config.OWNERS.contains(event.member!!.idLong)) {
+            return
+        }
+
+        if (command.properties.guildOnly && !event.channelType.isGuild) {
+            return event.reply("No, whore you can only use this in a guild").queue()
+        }
+
+        if (command.properties.nsfw && event.channelType.isGuild && !event.textChannel.isNSFW) {
+            BoobBot.requestUtil.get("https://nekos.life/api/v2/img/meow").queue {
+                val j = it?.json()
+                    ?: return@queue event.reply("This channel isn't NSFW, whore.").queue()
+
+                event.reply(
+                    "This isn't an NSFW channel whore, so have some SFW pussy.\n" +
+                            "Confused? Try `bbhuh` or join the support server https://discord.gg/wFfFRb3Qbr\n" +
+                            j.getString("url")
+                ).queue()
+            }
+            return
+        }
+
+        if (
+            event.channelType.isGuild && !event.guild!!.selfMember.hasPermission(
+                event.textChannel,
+                Permission.MESSAGE_EMBED_LINKS
+            )
+        ) {
+            return event.reply("I do not have permission to use embeds, da fuck?").queue()
+        }
+
+
+        if (event.isFromGuild && command.properties.userPermissions.isNotEmpty()) {
+            val missing = checkMissingPermissions(event.member!!, event.textChannel, command.properties.userPermissions)
+            if (missing.isNotEmpty()) {
+                val fmt = missing.joinToString("`\n `", prefix = "`", postfix = "`", transform = Permission::getName)
+                return event.reply("You need these permissions, whore:\n$fmt").queue()
+            }
+        }
+        if (event.isFromGuild && command.properties.botPermissions.isNotEmpty()) {
+            val missing =
+                checkMissingPermissions(event.guild!!.selfMember, event.textChannel, command.properties.botPermissions)
+
+            if (missing.isNotEmpty()) {
+                val fmt = missing.joinToString("`\n `", prefix = "`", postfix = "`", transform = Permission::getName)
+                return event.reply("I need these permissions, whore:\n$fmt").queue()
+            }
+        }
+
+        try {
+            command.execute(event)
+            BoobBot.metrics.record(Metrics.happened("SlashCommand"))
+            BoobBot.metrics.record(Metrics.happened(command.name))
+        } catch (e: Exception) {
+            BoobBot.log.error("Command `${command.name}` encountered an error during execution", e)
+            event.reply("\uD83D\uDEAB Command `${command.name}` encountered an error during execution").queue()
+        }
+    }
+
+
+} 
+ 17  src/main/kotlin/bot/boobbot/slashcommands/bot/Ping.kt 
+@@ -0,0 +1,17 @@
+package bot.boobbot.slashcommands.bot
+
+import bot.boobbot.BoobBot
+import bot.boobbot.entities.framework.Category
+import bot.boobbot.entities.framework.CommandProperties
+import bot.boobbot.entities.framework.SlashCommand
+import net.dv8tion.jda.api.events.interaction.SlashCommandEvent
+
+@CommandProperties(description = "Pong!", category = Category.MISC)
+class Ping : SlashCommand {
+    override fun execute(event: SlashCommandEvent) {
+        val shards = BoobBot.shardManager.shardsTotal
+        val shardsOnline = BoobBot.shardManager.onlineShards.size
+        val averageShardLatency = BoobBot.shardManager.averageGatewayPing
+        event.reply("**Shard info**: $shardsOnline/$shards\n**Average latency**: ${averageShardLatency}ms").queue();
+    }
+} 
+ 8  src/main/kotlin/bot/boobbot/slashcommands/fun/Dog.kt 
+@@ -0,0 +1,8 @@
+package bot.boobbot.slashcommands.`fun`
+
+import bot.boobbot.entities.framework.Category
+import bot.boobbot.entities.framework.CommandProperties
+import bot.boobbot.entities.framework.NekoLifeApiSlashCommand
+
+@CommandProperties(description = "random dog", category = Category.FUN, aliases = ["woof"])
+class Dog : NekoLifeApiSlashCommand("woof")
+ 24  src/main/kotlin/bot/boobbot/slashcommands/fun/Facts.kt 
+@@ -0,0 +1,24 @@
+package bot.boobbot.slashcommands.`fun`
+
+import bot.boobbot.BoobBot
+import bot.boobbot.entities.framework.AsyncSlashCommand
+import bot.boobbot.entities.framework.Category
+import bot.boobbot.entities.framework.CommandProperties
+import bot.boobbot.utils.Formats
+import bot.boobbot.utils.json
+import net.dv8tion.jda.api.events.interaction.SlashCommandEvent
+
+@CommandProperties(description = "Random facts", aliases = ["fact"], category = Category.FUN)
+class Facts : AsyncSlashCommand {
+
+    override suspend fun executeAsync(event: SlashCommandEvent) {
+
+        val res = BoobBot.requestUtil
+            .get("https://nekos.life/api/v2/fact")
+            .await()
+            ?: return event.reply("rip some error, press f").queue()
+        val body = res.json() ?: return event.reply("rip some error, press f").queue()
+        event.reply(Formats.info(body.get("fact").toString())).queue()
+    }
+
+} 
+ 8  src/main/kotlin/bot/boobbot/slashcommands/fun/Lizard.kt 
+@@ -0,0 +1,8 @@
+package bot.boobbot.slashcommands.`fun`
+
+import bot.boobbot.entities.framework.Category
+import bot.boobbot.entities.framework.CommandProperties
+import bot.boobbot.entities.framework.NekoLifeApiSlashCommand
+
+@CommandProperties(description = "random Lizard", category = Category.FUN)
+class Lizard : NekoLifeApiSlashCommand("lizard")
+ 13  src/main/kotlin/bot/boobbot/slashcommands/fun/Meow.kt 
+@@ -0,0 +1,13 @@
+package bot.boobbot.slashcommands.`fun`
+
+import bot.boobbot.BoobBot
+import bot.boobbot.entities.framework.*
+import bot.boobbot.utils.Colors
+import bot.boobbot.utils.Formats
+import bot.boobbot.utils.json
+import net.dv8tion.jda.api.EmbedBuilder
+import net.dv8tion.jda.api.events.interaction.SlashCommandEvent
+import java.time.Instant
+
+@CommandProperties(description = "random cat", category = Category.FUN, aliases = ["cat"])
+class Meow :  NekoLifeApiSlashCommand("meow") 
+ 21  src/main/kotlin/bot/boobbot/slashcommands/fun/Why.kt 
+@@ -0,0 +1,21 @@
+package bot.boobbot.slashcommands.`fun`
+
+import bot.boobbot.BoobBot
+import bot.boobbot.entities.framework.AsyncSlashCommand
+import bot.boobbot.entities.framework.Category
+import bot.boobbot.entities.framework.CommandProperties
+import bot.boobbot.utils.json
+import net.dv8tion.jda.api.events.interaction.SlashCommandEvent
+
+@CommandProperties(description = "Random why questions", category = Category.FUN)
+class Why : AsyncSlashCommand {
+    override suspend fun executeAsync(event: SlashCommandEvent) {
+        val res = BoobBot.requestUtil
+            .get("https://nekos.life/api/v2/why")
+            .await()
+            ?: return event.reply("rip some error, press f").queue()
+        val body = res.json() ?: return event.reply("rip some error, press f").queue()
+        event.reply(body.get("why").toString()).queue()
+    }
+
+} 
+ 8  src/main/kotlin/bot/boobbot/slashcommands/interactions/Interact.kt 
+@@ -0,0 +1,8 @@
+package bot.boobbot.slashcommands.interactions
+
+import bot.boobbot.entities.framework.Category
+import bot.boobbot.entities.framework.CommandProperties
+import bot.boobbot.entities.framework.FunSlashCommand
+
+@CommandProperties(description = "fun interactions.", category = Category.FUN, aliases = ["int"])
+class Interact : FunSlashCommand("interaction")
+ 8  src/main/kotlin/bot/boobbot/slashcommands/interactions/Pickup.kt 
+@@ -0,0 +1,8 @@
+package bot.boobbot.slashcommands.interactions
+
+import bot.boobbot.entities.framework.Category
+import bot.boobbot.entities.framework.CommandProperties
+import bot.boobbot.entities.framework.FunSlashCommand
+
+@CommandProperties(description = "bot.boobbot.slashcommands.interactions.Pickup someone.", category = Category.FUN, aliases = ["pu"])
+class Pickup : FunSlashCommand("pickups")
+ 48  src/main/kotlin/bot/boobbot/slashcommands/interactions/Spank.kt 
+@@ -0,0 +1,48 @@
+package bot.boobbot.slashcommands.interactions
+
+import bot.boobbot.BoobBot
+import bot.boobbot.entities.framework.*
+import bot.boobbot.utils.Colors
+import bot.boobbot.utils.Formats
+import bot.boobbot.utils.json
+import net.dv8tion.jda.api.EmbedBuilder
+import net.dv8tion.jda.api.events.interaction.SlashCommandEvent
+import net.dv8tion.jda.api.interactions.commands.OptionType
+import okhttp3.Headers
+import java.awt.Color
+import java.time.Instant
+
+@CommandProperties(description = "Spank someone.", category = Category.INTERACTIONS, nsfw = true)
+class Spank : AsyncSlashCommand {
+    override suspend fun executeAsync(event: SlashCommandEvent) {
+        val target = event.options.firstOrNull()?.asMember
+            ?: return event.replyEmbeds(
+                EmbedBuilder().apply {
+                    setColor(Color.red)
+                    setDescription(Formats.error("you didn't mention a @user, dumbass.\n"))
+                }.build()).queue()
+
+        if (target.idLong == BoobBot.selfId) {
+            return event.reply("Don't you fucking touch me whore, i will end you.").queue()
+        }
+
+        if (target.idLong == event.member!!.idLong) {
+            return event.reply("aww how sad you wanna play with yourself, well fucking don't go find a friend whore.").queue()
+        }
+        val res =
+            BoobBot.requestUtil.get("https://boob.bot/api/v2/img/spank", Headers.of("Key", BoobBot.config.BB_API_KEY))
+                .await()?.json()
+                ?: return event.reply(
+                    Formats.error(" oh? something broken af")
+                ).queue()
+
+        event.replyEmbeds(
+            EmbedBuilder().apply {
+            setTitle("<:spank:866431559557054464> ${event.member!!.effectiveName} Spanks ${target.effectiveName}")
+            setColor(Colors.rndColor)
+            setImage(res.getString("url"))
+            setTimestamp(Instant.now())
+        }.build()).queue()
+
+    }
+} 
